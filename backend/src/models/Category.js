@@ -8,12 +8,16 @@ const categorySchema = new mongoose.Schema(
       trim: true,
       minlength: 2,
       maxlength: 50,
-      unique: true,
     },
     description: {
       type: String,
       trim: true,
       maxlength: 200,
+    },
+    parent: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Category',
+      default: null,
     },
     isActive: {
       type: Boolean,
@@ -22,5 +26,7 @@ const categorySchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+categorySchema.index({ name: 1, parent: 1 }, { unique: true });
 
 module.exports = mongoose.model('Category', categorySchema);

@@ -72,10 +72,13 @@ async function registerShopkeeperFlow(data, res) {
     throw new ApiError(409, 'Mobile number already registered');
 
   // Validate category exists and is active
-  const category = await Category.findById(data.shopCategory);
-  if (!category || !category.isActive) {
-    throw new ApiError(400, 'Invalid or inactive category');
-  }
+const category = await Category.findById(data.shopCategory);
+if (!category || !category.isActive) {
+  throw new ApiError(400, 'Invalid or inactive category');
+}
+if (category.parent !== null) {
+  throw new ApiError(400, 'Shop category must be a top-level category, not a subcategory');
+}
 
   const user = await User.create({
     name: data.ownerName,

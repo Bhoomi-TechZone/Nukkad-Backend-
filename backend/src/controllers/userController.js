@@ -110,13 +110,16 @@ exports.updateUser = asyncHandler(async (req, res) => {
         throw new ApiError(404, 'No shop found for this shopkeeper');
       }
     } else {
-      if (data.shopCategory !== undefined) {
-        const cat = await Category.findById(data.shopCategory);
-        if (!cat || !cat.isActive) {
-          throw new ApiError(400, 'Invalid or inactive category');
-        }
-        shop.category = data.shopCategory;
-      }
+     if (data.shopCategory !== undefined) {
+  const cat = await Category.findById(data.shopCategory);
+  if (!cat || !cat.isActive) {
+    throw new ApiError(400, 'Invalid or inactive category');
+  }
+  if (cat.parent !== null) {
+    throw new ApiError(400, 'Shop category must be a top-level category, not a subcategory');
+  }
+  shop.category = data.shopCategory;
+}
 
       if (data.shopName !== undefined) shop.name = data.shopName;
       if (data.aboutShop !== undefined) shop.description = data.aboutShop;
