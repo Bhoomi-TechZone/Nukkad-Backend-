@@ -16,6 +16,7 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/users', require('./routes/userRoutes'));  
 app.use('/api/categories', require('./routes/categoryRoutes'));
 app.use('/api/shops', require('./routes/shopRoutes'));  
+app.use('/api/products', require('./routes/productRoutes'));
 app.get('/health', (req, res) => res.json({ status: 'OK' }));
 
 app.use((req, res) =>
