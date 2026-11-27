@@ -2,6 +2,28 @@ const { z } = require('zod');
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 
+// ---------- OTP ----------
+const otpTargetFields = {
+  email: z.string().email().optional(),
+  phone: z.string().regex(/^\d{10}$/, 'Phone must be 10 digits').optional(),
+  mobile: z.string().regex(/^\d{10}$/, 'Mobile must be 10 digits').optional(),
+};
+
+const hasTarget = (data) => Boolean(data.email || data.phone || data.mobile);
+const missingTargetError = {
+  message: 'Provide either email or phone/mobile',
+  path: ['phone'],
+};
+
+const sendOtpSchema = z.object(otpTargetFields).refine(hasTarget, missingTargetError);
+
+const verifyOtpSchema = z
+  .object({
+    ...otpTargetFields,
+    otp: z.string().trim().regex(/^\d{6}$/, 'OTP must be 6 digits'),
+  })
+  .refine(hasTarget, missingTargetError);
+
 // ---------- Consumer ----------
 const consumerSchema = z.object({
   name: z.string().min(2).max(50),
@@ -9,7 +31,7 @@ const consumerSchema = z.object({
   password: z.string().min(6),
   phone: z.string().regex(/^\d{10}$/, 'Phone must be 10 digits'),
   city: z.string().min(2).max(50),
-  otp: z.string(),
+  verificationToken: z.string().optional(),
 });
 
 // ---------- Shopkeeper ----------
@@ -18,7 +40,7 @@ const shopkeeperSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   mobile: z.string().regex(/^\d{10}$/, 'Mobile must be 10 digits'),
-  otp: z.string(),
+  verificationToken: z.string().optional(),
 
   shopName: z.string().min(2).max(100),
   shopCategory: z.string().regex(objectIdRegex, 'Invalid category id'),
@@ -49,7 +71,7 @@ const adminSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   phone: z.string().regex(/^\d{10}$/, 'Phone must be 10 digits'),
-  otp: z.string(),
+  verificationToken: z.string().optional(),
 });
 
 // ---------- Role-discriminated register ----------
@@ -65,4 +87,4 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-module.exports = { registerSchema, loginSchema };
+module.exports = { sendOtpSchema, verifyOtpSchema, registerSchema, loginSchema };
