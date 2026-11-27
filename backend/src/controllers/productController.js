@@ -114,8 +114,11 @@ exports.updateProduct = asyncHandler(async (req, res) => {
     }
   }
 
-  const { name, category, sellingPrice, mrp, description, specifications, isActive } = req.body;
+  // 1. Check if req.body exists, if not, default to empty object
+  const body = req.body || {};
+  const { name, category, sellingPrice, mrp, description, specifications, isActive } = body;
 
+  // 2. Update category if provided
   if (category) {
     const cat = await Category.findById(category);
     if (!cat || !cat.isActive) throw new ApiError(400, 'Invalid or inactive category');
@@ -123,12 +126,14 @@ exports.updateProduct = asyncHandler(async (req, res) => {
     product.category = category;
   }
 
-  if (name) product.name = name;
-  if (sellingPrice) product.sellingPrice = Number(sellingPrice);
-  if (mrp !== undefined) product.mrp = mrp ? Number(mrp) : undefined;
+  // 3. Update text/number fields if provided
+  if (name !== undefined) product.name = name;
+  if (sellingPrice !== undefined) product.sellingPrice = Number(sellingPrice);
+  if (mrp !== undefined) product.mrp = mrp === '' ? null : Number(mrp); // Handle empty mrp
   if (description !== undefined) product.description = description;
   if (isActive !== undefined) product.isActive = isActive === 'true';
 
+  // 4. Parse specifications if provided
   if (specifications) {
     try {
       product.specifications = JSON.parse(specifications);
@@ -137,11 +142,13 @@ exports.updateProduct = asyncHandler(async (req, res) => {
     }
   }
 
+  // 5. Update image ONLY if a new file was uploaded
   if (req.file) {
-    product.image = req.file.path; // Update Cloudinary URL if new image provided
+    product.image = req.file.path;
   }
 
   await product.save();
+  
   res.json({ success: true, message: 'Product updated', data: { product } });
 });
 

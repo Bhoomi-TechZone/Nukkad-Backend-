@@ -46,6 +46,14 @@ const errorHandler = (err, req, res, next) => {
     return res.status(401).json({ success: false, message: 'Token expired' });
   }
 
+  // Multer upload errors
+  if (err.name === 'MulterError') {
+    return res.status(400).json({
+      success: false,
+      message: err.message || 'File upload error',
+    });
+  }
+
   // Fallback
   const status = err.statusCode || 500;
   res.status(status).json({

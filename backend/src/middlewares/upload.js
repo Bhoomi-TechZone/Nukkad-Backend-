@@ -13,12 +13,38 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'uploads',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-    transformation: [{ width: 800, height: 800, crop: 'limit' }], // Resize to save space
+    folder: 'nukkad_products',
+    format: async (req, file) => 'png',
+    public_id: (req, file) => Date.now() + '-' + file.originalname.split('.')[0], // Optional: unique filename
   },
 });
 
 const upload = multer({ storage: storage });
+
+// 3. Configure Multer Storage for Reels (Video)
+const reelStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'nukkad_reels',
+    resource_type: 'video',
+    allowed_formats: ['mp4', 'mov', 'webm', 'mkv'],
+    public_id: (req, file) => Date.now() + '-' + file.originalname.split('.')[0],
+  },
+});
+
+const uploadReel = multer({
+  storage: reelStorage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max video size
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype || !file.mimetype.startsWith('video/')) {
+      const err = new Error('Only video files are allowed');
+      err.statusCode = 400;
+      return cb(err, false);
+    }
+    cb(null, true);
+  },
+});
+
+upload.uploadReel = uploadReel;
 
 module.exports = upload;
