@@ -16,7 +16,7 @@ const {
 } = require('../validators/authValidator');
 
 const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
-const VERIFIED_WINDOW_MS = 15 * 60 * 1000; // 15 minutes to complete registration
+const VERIFIED_WINDOW_MS = 15 * 60 * 1000; // 15 minutes to complete login flow
 const MAX_OTP_ATTEMPTS = 5;
 
 const signToken = (id, role) =>
@@ -24,19 +24,34 @@ const signToken = (id, role) =>
     expiresIn: process.env.JWT_EXPIRES_IN,
   });
 
-const signVerificationToken = (otpId, target, targetType) =>
-  jwt.sign(
-    { purpose: 'register-otp', otpId, target, targetType },
-    process.env.JWT_SECRET,
-    { expiresIn: '15m' }
-  );
+function resolveTarget(data) {
+  const method = data.method || (data.phone || data.mobile ? 'phone' : 'email');
+  const target =
+    method === 'phone'
+      ? (data.phone || data.mobile).trim()
+      : data.email.trim().toLowerCase();
+  return { method, target };
+}
 
-function resolveOtpTarget(data) {
-  const phone = data.phone || data.mobile;
-  if (phone) {
-    return { target: phone.trim(), targetType: 'phone' };
+function findUserByMethod(method, target) {
+  return method === 'phone'
+    ? User.findOne({ phone: target })
+    : User.findOne({ email: target });
+}
+
+function assertUserCanLogin(user) {
+  if (!user) {
+    throw new ApiError(404, 'Account does not exist. Please register first.');
   }
-  return { target: data.email.trim().toLowerCase(), targetType: 'email' };
+  if (user.status === 'pending') {
+    throw new ApiError(403, 'Account pending admin approval');
+  }
+  if (user.status === 'rejected') {
+    throw new ApiError(403, 'Account rejected. Contact support.');
+  }
+  if (user.status === 'blocked') {
+    throw new ApiError(403, 'Account blocked');
+  }
 }
 
 async function assertUniqueUser({ email, phone }) {
@@ -48,110 +63,52 @@ async function assertUniqueUser({ email, phone }) {
   }
 }
 
-async function assertOtpVerifiedForRegistration(data) {
-  const phone = data.phone || data.mobile;
-  const targets = [data.email?.toLowerCase(), phone].filter(Boolean);
-
-  if (data.verificationToken) {
-    let decoded;
-    try {
-      decoded = jwt.verify(data.verificationToken, process.env.JWT_SECRET);
-    } catch {
-      throw new ApiError(400, 'Invalid or expired verification token');
-    }
-
-    if (
-      decoded.purpose !== 'register-otp' ||
-      !targets.includes(decoded.target)
-    ) {
-      throw new ApiError(400, 'Verification token does not match profile');
-    }
-
-    const otpRecord = await Otp.findOne({
-      _id: decoded.otpId,
-      target: decoded.target,
-      verified: true,
-      expiresAt: { $gt: new Date() },
-    });
-
-    if (!otpRecord) {
-      throw new ApiError(400, 'OTP verification expired or already used');
-    }
-
-    return targets;
+async function validateShopCategory(categoryId) {
+  const category = await Category.findById(categoryId);
+  if (!category || !category.isActive) {
+    throw new ApiError(400, 'Invalid or inactive category');
   }
-
-  const otpRecord = await Otp.findOne({
-    target: { $in: targets },
-    verified: true,
-    expiresAt: { $gt: new Date() },
-  }).sort({ updatedAt: -1 });
-
-  if (!otpRecord) {
-    throw new ApiError(400, 'Please verify OTP before registering');
-  }
-
-  return targets;
-}
-
-// ================= SEND OTP =================
-// POST /api/auth/send-otp
-exports.sendOtp = asyncHandler(async (req, res) => {
-  const data = sendOtpSchema.parse(req.body);
-  const { target, targetType } = resolveOtpTarget(data);
-
-  const existingQuery =
-    targetType === 'phone' ? { phone: target } : { email: target };
-  if (await User.findOne(existingQuery)) {
+  if (category.parent !== null) {
     throw new ApiError(
-      409,
-      targetType === 'phone'
-        ? 'Phone already registered'
-        : 'Email already registered'
+      400,
+      'Shop category must be a top-level category, not a subcategory'
     );
   }
+}
 
+async function issueOtp({ target, method, purpose, pendingData = null, cleanupFilter }) {
   const otp =
     process.env.STATIC_OTP || crypto.randomInt(100000, 1000000).toString();
   const otpHash = await bcrypt.hash(otp, 10);
 
-  await Otp.deleteMany({ target });
+  await Otp.deleteMany(cleanupFilter || { target, purpose, method });
   await Otp.create({
     target,
-    targetType,
+    method,
+    purpose,
     otpHash,
     verified: false,
     attempts: 0,
+    pendingData,
     expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
   });
 
-  res.json({
-    success: true,
-    message: 'OTP sent successfully',
-    data: {
-      target,
-      targetType,
-      expiresInSeconds: OTP_EXPIRY_MS / 1000,
-      ...(process.env.NODE_ENV === 'development' && { otp }),
-    },
-  });
-});
-
-// ================= VERIFY OTP =================
-// POST /api/auth/verify-otp
-exports.verifyOtp = asyncHandler(async (req, res) => {
-  const data = verifyOtpSchema.parse(req.body);
-  const { target, targetType } = resolveOtpTarget(data);
-
-  const otpRecord = await Otp.findOne({
+  return {
+    purpose,
+    method,
     target,
-    expiresAt: { $gt: new Date() },
-  }).sort({ createdAt: -1 });
+    expiresInSeconds: OTP_EXPIRY_MS / 1000,
+    ...(process.env.NODE_ENV === 'development' && { otp }),
+  };
+}
 
+async function verifyActiveOtpRecord(otpRecord, candidateOtp) {
   if (!otpRecord) {
     throw new ApiError(400, 'OTP expired or not requested');
   }
-
+  if (otpRecord.verified) {
+    throw new ApiError(400, 'OTP already verified');
+  }
   if (otpRecord.attempts >= MAX_OTP_ATTEMPTS) {
     throw new ApiError(
       429,
@@ -159,58 +116,180 @@ exports.verifyOtp = asyncHandler(async (req, res) => {
     );
   }
 
-  const isMatch = await bcrypt.compare(data.otp, otpRecord.otpHash);
+  const isMatch = await bcrypt.compare(candidateOtp, otpRecord.otpHash);
   if (!isMatch) {
     otpRecord.attempts += 1;
     await otpRecord.save();
     throw new ApiError(400, 'Invalid OTP');
   }
+}
 
+function formatUserPayload(user) {
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    phone: user.phone,
+    city: user.city,
+    pincode: user.pincode,
+    role: user.role,
+    status: user.status,
+  };
+}
+
+// ================= SEND OTP =================
+// POST /api/auth/send-otp
+exports.sendOtp = asyncHandler(async (req, res) => {
+  const data = sendOtpSchema.parse(req.body);
+  const { method, target } = resolveTarget(data);
+  const existingUser = await findUserByMethod(method, target);
+
+  let pendingData = null;
+
+  if (data.purpose === 'register') {
+    if (existingUser) {
+      throw new ApiError(
+        409,
+        method === 'phone' ? 'Phone already registered' : 'Email already registered'
+      );
+    }
+
+    // Preserve pending registration details when resending OTP
+    const existingPending = await Otp.findOne({
+      purpose: 'register',
+      expiresAt: { $gt: new Date() },
+      $or: [
+        { target },
+        { 'pendingData.email': target },
+        { 'pendingData.phone': target },
+        { 'pendingData.mobile': target },
+      ],
+    }).sort({ createdAt: -1 });
+
+    if (!existingPending?.pendingData) {
+      throw new ApiError(
+        400,
+        'Please submit registration details first before requesting OTP'
+      );
+    }
+
+    pendingData = existingPending.pendingData;
+  }
+
+  if (data.purpose === 'login') {
+    assertUserCanLogin(existingUser);
+  }
+
+  const otpPayload = await issueOtp({
+    target,
+    method,
+    purpose: data.purpose,
+    pendingData,
+  });
+
+  res.json({
+    success: true,
+    message: 'OTP sent successfully',
+    data: otpPayload,
+  });
+});
+
+// ================= REGISTER (submit details -> send OTP) =================
+// POST /api/auth/register
+exports.register = asyncHandler(async (req, res) => {
+  const data = registerSchema.parse(req.body);
+  const phone = data.phone || data.mobile;
+  const email = data.email.trim().toLowerCase();
+
+  await assertUniqueUser({ email, phone });
+
+  if (data.role === 'shopkeeper') {
+    await validateShopCategory(data.shopCategory);
+  }
+
+  const method = data.method || 'phone';
+  const target = method === 'email' ? email : phone;
+
+  const otpPayload = await issueOtp({
+    target,
+    method,
+    purpose: 'register',
+    pendingData: { ...data, email },
+    cleanupFilter: {
+      purpose: 'register',
+      $or: [
+        { target: { $in: [email, phone] } },
+        { 'pendingData.email': email },
+        { 'pendingData.phone': phone },
+        { 'pendingData.mobile': phone },
+      ],
+    },
+  });
+
+  res.status(200).json({
+    success: true,
+    message: 'OTP sent successfully. Verify OTP to complete registration.',
+    data: otpPayload,
+  });
+});
+
+// ================= VERIFY OTP =================
+// POST /api/auth/verify-otp
+exports.verifyOtp = asyncHandler(async (req, res) => {
+  const data = verifyOtpSchema.parse(req.body);
+  const { method, target } = resolveTarget(data);
+
+  const otpRecord = await Otp.findOne({
+    target,
+    method,
+    purpose: data.purpose,
+    expiresAt: { $gt: new Date() },
+  }).sort({ createdAt: -1 });
+
+  await verifyActiveOtpRecord(otpRecord, data.otp);
+
+  if (data.purpose === 'register') {
+    const pendingData = otpRecord.pendingData;
+    if (!pendingData) {
+      throw new ApiError(
+        400,
+        'Registration details not found. Please submit registration form first.'
+      );
+    }
+
+    const payload =
+      pendingData.role === 'consumer'
+        ? await registerConsumerFlow(pendingData)
+        : await registerShopkeeperFlow(pendingData);
+
+    await Otp.deleteMany({ _id: otpRecord._id });
+
+    return res.status(201).json({
+      success: true,
+      message: payload.message,
+      data: payload.data,
+    });
+  }
+
+  // purpose === 'login'
   otpRecord.verified = true;
   otpRecord.expiresAt = new Date(Date.now() + VERIFIED_WINDOW_MS);
   await otpRecord.save();
 
-  const verificationToken = signVerificationToken(
-    otpRecord._id,
-    target,
-    targetType
-  );
+  const user = await findUserByMethod(method, target);
+  assertUserCanLogin(user);
 
-  res.json({
+  return res.json({
     success: true,
     message: 'OTP verified successfully',
     data: {
       verified: true,
+      purpose: 'login',
+      method,
       target,
-      targetType,
-      verificationToken,
+      token: signToken(user._id, user.role),
+      user: formatUserPayload(user),
     },
-  });
-});
-
-// ================= REGISTER (role-based) =================
-// POST /api/auth/register
-exports.register = asyncHandler(async (req, res) => {
-  const data = registerSchema.parse(req.body);
-  const verifiedTargets = await assertOtpVerifiedForRegistration(data);
-
-  let payload;
-  if (data.role === 'consumer') {
-    payload = await registerConsumerFlow(data);
-  } else if (data.role === 'shopkeeper') {
-    payload = await registerShopkeeperFlow(data);
-  } else if (data.role === 'admin') {
-    payload = await registerAdminFlow(data);
-  } else {
-    throw new ApiError(400, 'Invalid role');
-  }
-
-  await Otp.deleteMany({ target: { $in: verifiedTargets } });
-
-  return res.status(201).json({
-    success: true,
-    message: payload.message,
-    data: payload.data,
   });
 });
 
@@ -221,9 +300,9 @@ async function registerConsumerFlow(data) {
   const user = await User.create({
     name: data.name,
     email: data.email,
-    password: data.password,
     phone: data.phone,
     city: data.city,
+    pincode: data.pincode,
     role: 'consumer',
     status: 'active',
   });
@@ -234,15 +313,7 @@ async function registerConsumerFlow(data) {
     message: 'Registration successful',
     data: {
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        city: user.city,
-        role: user.role,
-        status: user.status,
-      },
+      user: formatUserPayload(user),
     },
   };
 }
@@ -250,24 +321,13 @@ async function registerConsumerFlow(data) {
 // ---------- Shopkeeper ----------
 async function registerShopkeeperFlow(data) {
   await assertUniqueUser({ email: data.email, phone: data.mobile });
-
-  // Validate category exists and is active
-  const category = await Category.findById(data.shopCategory);
-  if (!category || !category.isActive) {
-    throw new ApiError(400, 'Invalid or inactive category');
-  }
-  if (category.parent !== null) {
-    throw new ApiError(
-      400,
-      'Shop category must be a top-level category, not a subcategory'
-    );
-  }
+  await validateShopCategory(data.shopCategory);
 
   const user = await User.create({
     name: data.ownerName,
     email: data.email,
-    password: data.password,
     phone: data.mobile,
+    pincode: data.pincode || data.address.pincode,
     role: 'shopkeeper',
     status: 'pending',
   });
@@ -291,14 +351,7 @@ async function registerShopkeeperFlow(data) {
   return {
     message: 'Shop registration successful. Pending admin approval.',
     data: {
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        status: user.status,
-      },
+      user: formatUserPayload(user),
       shop: {
         id: shop._id,
         name: shop.name,
@@ -310,52 +363,39 @@ async function registerShopkeeperFlow(data) {
   };
 }
 
-// ---------- Admin ----------
-async function registerAdminFlow(data) {
-  await assertUniqueUser({ email: data.email, phone: data.phone });
-
-  const user = await User.create({
-    name: data.name,
-    email: data.email,
-    password: data.password,
-    phone: data.phone,
-    role: 'admin',
-    status: 'active',
-  });
-
-  const token = signToken(user._id, user.role);
-
-  return {
-    message: 'Registration successful',
-    data: {
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        status: user.status,
-      },
-    },
-  };
-}
-
-// ================= LOGIN =================
+// ================= OTP LOGIN =================
+// POST /api/auth/login
 exports.login = asyncHandler(async (req, res) => {
-  const { email, password } = loginSchema.parse(req.body);
+  const data = loginSchema.parse(req.body);
+  const { method, target } = resolveTarget(data);
 
-  const user = await User.findOne({ email }).select('+password');
-  if (!user || !(await user.comparePassword(password))) {
-    throw new ApiError(401, 'Invalid credentials');
+  const user = await findUserByMethod(method, target);
+  assertUserCanLogin(user);
+
+  if (data.otp) {
+    const otpRecord = await Otp.findOne({
+      target,
+      method,
+      purpose: 'login',
+      expiresAt: { $gt: new Date() },
+    }).sort({ createdAt: -1 });
+
+    await verifyActiveOtpRecord(otpRecord, data.otp);
+  } else {
+    const verifiedOtp = await Otp.findOne({
+      target,
+      method,
+      purpose: 'login',
+      verified: true,
+      expiresAt: { $gt: new Date() },
+    }).sort({ updatedAt: -1 });
+
+    if (!verifiedOtp) {
+      throw new ApiError(400, 'Please verify OTP before logging in');
+    }
   }
 
-  if (user.status === 'pending')
-    throw new ApiError(403, 'Account pending admin approval');
-  if (user.status === 'rejected')
-    throw new ApiError(403, 'Account rejected. Contact support.');
-  if (user.status === 'blocked')
-    throw new ApiError(403, 'Account blocked');
+  await Otp.deleteMany({ target, method, purpose: 'login' });
 
   const token = signToken(user._id, user.role);
 
@@ -364,13 +404,7 @@ exports.login = asyncHandler(async (req, res) => {
     message: 'Login successful',
     data: {
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        status: user.status,
-      },
+      user: formatUserPayload(user),
     },
   });
 });

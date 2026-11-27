@@ -73,7 +73,7 @@ exports.updateUser = asyncHandler(async (req, res) => {
     if (exists) throw new ApiError(409, 'Phone already registered');
   }
 
-  const userFields = ['name', 'email', 'phone', 'city', 'status'];
+  const userFields = ['name', 'email', 'phone', 'city', 'pincode', 'status'];
   userFields.forEach((field) => {
     if (data[field] !== undefined) targetUser[field] = data[field];
   });
@@ -141,6 +141,7 @@ exports.updateUser = asyncHandler(async (req, res) => {
       email: targetUser.email,
       phone: targetUser.phone,
       city: targetUser.city,
+      pincode: targetUser.pincode,
       role: targetUser.role,
       status: targetUser.status,
     },

@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema(
   {
@@ -18,12 +17,6 @@ const userSchema = new mongoose.Schema(
       trim: true,
       match: [/^\S+@\S+\.\S+$/, 'Invalid email format'],
     },
-    password: {
-      type: String,
-      required: [true, 'Password is required'],
-      minlength: 6,
-      select: false,
-    },
     phone: {
       type: String,
       required: [true, 'Phone is required'],
@@ -34,7 +27,12 @@ const userSchema = new mongoose.Schema(
     city: {
       type: String,
       trim: true,
-      // Only required for consumers — enforced in controller
+      // Only required for consumers — enforced in validator/controller
+    },
+    pincode: {
+      type: String,
+      trim: true,
+      match: [/^\d{6}$/, 'Pincode must be 6 digits'],
     },
     role: {
       type: String,
@@ -49,14 +47,5 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-userSchema.pre('save', async function () {
-  if (!this.isModified('password')) return;
-  this.password = await bcrypt.hash(this.password, 10);
-});
-
-userSchema.methods.comparePassword = function (candidate) {
-  return bcrypt.compare(candidate, this.password);
-};
 
 module.exports = mongoose.model('User', userSchema);

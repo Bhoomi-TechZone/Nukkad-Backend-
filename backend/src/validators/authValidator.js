@@ -1,46 +1,61 @@
 const { z } = require('zod');
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+const phoneRegex = /^\d{10}$/;
+const pincodeRegex = /^\d{6}$/;
 
 // ---------- OTP ----------
-const otpTargetFields = {
+const otpBaseFields = {
+  purpose: z.enum(['register', 'login']),
+  method: z.enum(['email', 'phone']),
   email: z.string().email().optional(),
-  phone: z.string().regex(/^\d{10}$/, 'Phone must be 10 digits').optional(),
-  mobile: z.string().regex(/^\d{10}$/, 'Mobile must be 10 digits').optional(),
+  phone: z.string().regex(phoneRegex, 'Phone must be 10 digits').optional(),
+  mobile: z.string().regex(phoneRegex, 'Mobile must be 10 digits').optional(),
 };
 
-const hasTarget = (data) => Boolean(data.email || data.phone || data.mobile);
-const missingTargetError = {
-  message: 'Provide either email or phone/mobile',
-  path: ['phone'],
-};
+function validateMethodTarget(data, ctx) {
+  if (data.method === 'email' && !data.email) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Email is required when method is email',
+      path: ['email'],
+    });
+  }
+  if (data.method === 'phone' && !(data.phone || data.mobile)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Phone is required when method is phone',
+      path: ['phone'],
+    });
+  }
+}
 
-const sendOtpSchema = z.object(otpTargetFields).refine(hasTarget, missingTargetError);
+const sendOtpSchema = z.object(otpBaseFields).superRefine(validateMethodTarget);
 
 const verifyOtpSchema = z
   .object({
-    ...otpTargetFields,
+    ...otpBaseFields,
     otp: z.string().trim().regex(/^\d{6}$/, 'OTP must be 6 digits'),
   })
-  .refine(hasTarget, missingTargetError);
+  .superRefine(validateMethodTarget);
 
 // ---------- Consumer ----------
 const consumerSchema = z.object({
   name: z.string().min(2).max(50),
   email: z.string().email(),
-  password: z.string().min(6),
-  phone: z.string().regex(/^\d{10}$/, 'Phone must be 10 digits'),
+  phone: z.string().regex(phoneRegex, 'Phone must be 10 digits'),
   city: z.string().min(2).max(50),
-  verificationToken: z.string().optional(),
+  pincode: z.string().regex(pincodeRegex, 'Pincode must be 6 digits'),
+  method: z.enum(['email', 'phone']).optional(),
 });
 
 // ---------- Shopkeeper ----------
 const shopkeeperSchema = z.object({
   ownerName: z.string().min(2).max(50),
   email: z.string().email(),
-  password: z.string().min(6),
-  mobile: z.string().regex(/^\d{10}$/, 'Mobile must be 10 digits'),
-  verificationToken: z.string().optional(),
+  mobile: z.string().regex(phoneRegex, 'Mobile must be 10 digits'),
+  pincode: z.string().regex(pincodeRegex, 'Pincode must be 6 digits').optional(),
+  method: z.enum(['email', 'phone']).optional(),
 
   shopName: z.string().min(2).max(100),
   shopCategory: z.string().regex(objectIdRegex, 'Invalid category id'),
@@ -60,31 +75,38 @@ const shopkeeperSchema = z.object({
   address: z.object({
     area: z.string().min(2).max(100),
     city: z.string().min(2).max(50),
-    pincode: z.string().regex(/^\d{6}$/, 'Pincode must be 6 digits'),
+    pincode: z.string().regex(pincodeRegex, 'Pincode must be 6 digits'),
     state: z.string().min(2).max(50),
   }),
 });
 
-// ---------- Admin ----------
-const adminSchema = z.object({
-  name: z.string().min(2).max(50),
-  email: z.string().email(),
-  password: z.string().min(6),
-  phone: z.string().regex(/^\d{10}$/, 'Phone must be 10 digits'),
-  verificationToken: z.string().optional(),
-});
-
-// ---------- Role-discriminated register ----------
+// ---------- Role-discriminated public register (consumer & shopkeeper only) ----------
 const registerSchema = z.discriminatedUnion('role', [
   consumerSchema.extend({ role: z.literal('consumer') }),
   shopkeeperSchema.extend({ role: z.literal('shopkeeper') }),
-  adminSchema.extend({ role: z.literal('admin') }),
 ]);
 
-// ---------- Login ----------
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
+// ---------- OTP Login (email or phone, no role required) ----------
+const loginSchema = z
+  .object({
+    method: z.enum(['email', 'phone']).optional(),
+    email: z.string().email().optional(),
+    phone: z.string().regex(phoneRegex, 'Phone must be 10 digits').optional(),
+    mobile: z.string().regex(phoneRegex, 'Mobile must be 10 digits').optional(),
+    otp: z.string().trim().regex(/^\d{6}$/, 'OTP must be 6 digits').optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.method) {
+      validateMethodTarget(data, ctx);
+      return;
+    }
+    if (!(data.email || data.phone || data.mobile)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Provide either email or phone',
+        path: ['email'],
+      });
+    }
+  });
 
 module.exports = { sendOtpSchema, verifyOtpSchema, registerSchema, loginSchema };

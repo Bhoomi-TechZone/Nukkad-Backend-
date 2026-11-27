@@ -8,6 +8,7 @@ const updateUserSchema = z.object({
   email: z.string().email().optional(),
   phone: z.string().regex(/^\d{10}$/, 'Phone must be 10 digits').optional(),
   city: z.string().min(2).max(50).optional(),
+  pincode: z.string().regex(/^\d{6}$/, 'Pincode must be 6 digits').optional(),
   status: z.enum(['active', 'pending', 'rejected', 'blocked']).optional(),
 
   // ---- Shop fields (only used if target is shopkeeper) ----

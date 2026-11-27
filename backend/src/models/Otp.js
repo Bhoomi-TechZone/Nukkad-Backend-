@@ -9,9 +9,14 @@ const otpSchema = new mongoose.Schema(
       lowercase: true,
       index: true,
     },
-    targetType: {
+    method: {
       type: String,
-      enum: ['phone', 'email'],
+      enum: ['email', 'phone'],
+      required: true,
+    },
+    purpose: {
+      type: String,
+      enum: ['register', 'login'],
       required: true,
     },
     otpHash: {
@@ -26,6 +31,10 @@ const otpSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    pendingData: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
     expiresAt: {
       type: Date,
       required: true,
@@ -34,8 +43,8 @@ const otpSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+otpSchema.index({ target: 1, purpose: 1, method: 1 });
 // Automatically delete expired OTP records
 otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.model('Otp', otpSchema);
-
