@@ -5,7 +5,7 @@ const { protect } = require('../middlewares/auth');
 router.post('/send-otp', ctrl.sendOtp);
 router.post('/verify-otp', ctrl.verifyOtp);
 router.post('/register', ctrl.register);
-router.post('/login', ctrl.login);
+// router.post('/login', ctrl.login); // removed: phone-only OTP login handled via verifyOtp
 router.get('/me', protect, ctrl.me);
 
 module.exports = router;

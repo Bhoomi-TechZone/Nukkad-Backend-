@@ -9,14 +9,7 @@ const userSchema = new mongoose.Schema(
       minlength: 2,
       maxlength: 50,
     },
-    email: {
-      type: String,
-      required: [true, 'Email is required'],
-      unique: true,
-      lowercase: true,
-      trim: true,
-      match: [/^\S+@\S+\.\S+$/, 'Invalid email format'],
-    },
+    // email field removed – phone‑only flow
     phone: {
       type: String,
       required: [true, 'Phone is required'],
